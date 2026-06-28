@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Auto‑loading Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-measure@3.1.0/dist/leaflet-measure.css" />
+  <style>
+    body { margin: 0; padding: 0; }
+    #map { width: 100vw; height: 100vh; }
+    .info { padding: 6px 8px; background: white; box-shadow: 0 0 15px rgba(0,0,0,0.2); border-radius: 5px; }
+    .legend i { width: 18px; height: 18px; float: left; margin-right: 8px; opacity: 0.7; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-measure@3.1.0/dist/leaflet-measure.js"></script>
+  <script src="https://unpkg.com/leaflet-search@4.0.0/dist/leaflet-search.min.js"></script>
+
+  <script>
+    // Default style pool (colours cycle through these)
+    const colorPalette = [
+      "#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
+      "#911eb4", "#42d4f4", "#f032e6", "#bfef45", "#fabebe",
+      "#469990", "#e6beff", "#9a6324", "#800000", "#aaffc3",
+      "#808000", "#ffd8b1", "#000075", "#a9a9a9"
+    ];
+    let colorIndex = 0;
+
+    function getNextColor() {
+      return colorPalette[colorIndex++ % colorPalette.length];
+    }
+
+    const map = L.map('map').setView([20, 0], 2);
+
+    // Basemap
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap contributors, &copy; CARTO',
+      maxZoom: 19
+    }).addTo(map);
+
+    // Helper to guess a display name from filename
+    function guessName(filename) {
+      return filename
+        .replace(/\.[^/.]+$/, "")     // remove extension
+        .replace(/[-_]/g, " ")        // replace hyphens/underscores with spaces
+        .replace(/\b\w/g, c => c.toUpperCase()); // capitalise words
+    }
+
+    // Build popup table
+    function buildPopup(feature) {
+      let html = '<table style="max-width:250px;">';
+      for (let key in feature.properties) {
+        html += `<tr><td><strong>${key}</strong></td><td>${feature.properties[key]}</td></tr>`;
+      }
+      html += '</table>';
+      return html;
+    }
+
+    async function loadLayers() {
+      let layersList;
+      try {
+        const resp = await fetch('layers.json');
+        if (!resp.ok) throw new Error('layers.json not found');
+        layersList = await resp.json();
+        if (!Array.isArray(layersList)) throw new Error('Invalid format');
+      } catch (err) {
+        alert('Could not load layers.json. Create it with at least [{"file":"yourdata.geojson"}].');
+        console.error(err);
+        return;
+      }
+
+      const overlayLayers = {};
+      const legendDiv = document.createElement('div');
+      legendDiv.className = 'info legend';
+      legendDiv.innerHTML = '<strong>Legend</strong><br>';
+      let allBounds = L.latLngBounds();
+
+      // Process each entry
+      for (const layerDef of layersList) {
+        const fileName = layerDef.file;
+        const layerName = layerDef.name || guessName(fileName);
+        // Determine styles
+        const baseStyle = layerDef.style || {};
+        const pointStyle = layerDef.pointStyle || baseStyle;
+
+        // Assign default colours if missing
+        const usedColor = baseStyle.fillColor || baseStyle.color || pointStyle.fillColor || pointStyle.color || getNextColor();
+
+        const mergedBase = {
+          color: usedColor,
+          weight: 2,
+          opacity: 0.8,
+          fillOpacity: 0.5,
+          ...baseStyle,
+          fillColor: baseStyle.fillColor || usedColor,
+          color: baseStyle.color || usedColor
+        };
+        const mergedPoint = {
+          radius: 7,
+          fillColor: usedColor,
+          color: "#333",
+          weight: 1,
+          opacity: 1,
+          fillOpacity: 0.8,
+          ...pointStyle,
+          fillColor: pointStyle.fillColor || usedColor,
+          color: pointStyle.color || "#333"
+        };
+
+        try {
+          const dataResp = await fetch(fileName);
+          if (!dataResp.ok) throw new Error(`HTTP ${dataResp.status}`);
+          const geojson = await dataResp.json();
+
+          const leafletLayer = L.geoJSON(geojson, {
+            style: (feature) => {
+              if (feature.geometry.type === 'Point' || feature.geometry.type === 'MultiPoint') {
+                return {}; // handled by pointToLayer
+              }
+              return mergedBase;
+            },
+            pointToLayer: (feature, latlng) => L.circleMarker(latlng, mergedPoint),
+            onEachFeature: (feature, layer) => layer.bindPopup(buildPopup(feature))
+          }).addTo(map);
+
+          overlayLayers[layerName] = leafletLayer;
+          if (leafletLayer.getBounds().isValid()) allBounds.extend(leafletLayer.getBounds());
+
+          // Legend entry
+          legendDiv.innerHTML += `<i style="background:${mergedPoint.fillColor || mergedBase.fillColor}"></i> ${layerName}<br>`;
+
+          // Search (if searchField specified)
+          if (layerDef.searchField) {
+            const searchControl = new L.Control.Search({
+              layer: leafletLayer,
+              propertyName: layerDef.searchField,
+              marker: false,
+              moveToLocation: (latlng, title, map) => map.setView(latlng, 17),
+              textPlaceholder: `Search ${layerName}...`
+            });
+            map.addControl(searchControl);
+          }
+          console.log(`✅ Loaded: ${layerName}`);
+        } catch (e) {
+          console.warn(`⚠️ Skipping ${fileName}: ${e.message}`);
+        }
+      }
+
+      // Finalize UI
+      if (allBounds.isValid()) map.fitBounds(allBounds);
+      if (Object.keys(overlayLayers).length > 0) {
+        L.control.layers(null, overlayLayers).addTo(map);
+      }
+
+      L.control.measure({
+        position: 'topright',
+        primaryLengthUnit: 'kilometers',
+        secondaryLengthUnit: 'miles'
+      }).addTo(map);
+
+      const legendControl = L.control({ position: 'bottomright' });
+      legendControl.onAdd = () => legendDiv;
+      legendControl.addTo(map);
+
+      // Download links
+      const dlControl = L.control({ position: 'bottomleft' });
+      dlControl.onAdd = function () {
+        const div = L.DomUtil.create('div', 'info');
+        div.innerHTML = '<strong>📥 Download</strong><br>';
+        layersList.forEach(l => {
+          const name = l.name || guessName(l.file);
+          div.innerHTML += `<a href="${l.file}" download>${name}</a><br>`;
+        });
+        return div;
+      };
+      dlControl.addTo(map);
+    }
+
+    loadLayers();
+  </script>
+</body>
+</html>
