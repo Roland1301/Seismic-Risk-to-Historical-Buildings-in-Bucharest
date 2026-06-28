@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Multi‑Layer Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-measure@3.1.0/dist/leaflet-measure.css" />
+  <style>
+    body { margin: 0; padding: 0; }
+    #map { width: 100vw; height: 100vh; }
+    .info { padding: 6px 8px; background: white; box-shadow: 0 0 15px rgba(0,0,0,0.2); border-radius: 5px; }
+    .legend i { width: 18px; height: 18px; float: left; margin-right: 8px; opacity: 0.7; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-measure@3.1.0/dist/leaflet-measure.js"></script>
+  <script src="https://unpkg.com/leaflet-search@4.0.0/dist/leaflet-search.min.js"></script>
+
+  <script>
+    /* =============================================
+       1. EDIT THIS ARRAY TO ADD YOUR LAYERS
+       ============================================= */
+    const layersToLoad = [
+      {
+        file: "layer1.geojson",              // filename (exact, case‑sensitive)
+        name: "Layer 1 Display Name",        // label in the layer control
+        searchField: "name",                 // attribute used for search (optional)
+        style: {                             // style for points/lines/polygons
+          fillColor: "#ff7800",
+          color: "#333",
+          weight: 2,
+          opacity: 1,
+          fillOpacity: 0.6
+        },
+        pointStyle: {                        // style for points only (circleMarker)
+          radius: 8,
+          fillColor: "#ff7800",
+          color: "#333",
+          weight: 1,
+          opacity: 1,
+          fillOpacity: 0.8
+        }
+      },
+      {
+        file: "layer2.geojson",
+        name: "Layer 2 Points",
+        searchField: "site_name",
+        style: { fillColor: "#3388ff", color: "#fff", weight: 2, opacity: 1, fillOpacity: 0.7 },
+        pointStyle: { radius: 6, fillColor: "#3388ff", color: "#fff", weight: 1, opacity: 1, fillOpacity: 0.9 }
+      }
+      // add more layers here...
+    ];
+
+    /* =============================================
+       2. MAP SETUP & BASEMAP
+       ============================================= */
+    const map = L.map('map').setView([51.505, -0.09], 6);
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap contributors, &copy; CARTO',
+      maxZoom: 19
+    }).addTo(map);
+
+    /* =============================================
+       3. LAYER LOADING & PROCESSING
+       ============================================= */
+    const overlayLayers = {};        // for layer control
+    let allBounds = L.latLngBounds(); // to fit all layers
+    const legendDiv = document.createElement('div');
+    legendDiv.className = 'info legend';
+    legendDiv.innerHTML = '<strong>Legend</strong><br>';
+
+    // Function to create a popup table from feature properties
+    function buildPopup(feature) {
+      let html = '<table style="max-width:250px;">';
+      for (let key in feature.properties) {
+        html += `<tr><td><strong>${key}</strong></td><td>${feature.properties[key]}</td></tr>`;
+      }
+      html += '</table>';
+      return html;
+    }
+
+    // Load each layer sequentially
+    async function loadAllLayers() {
+      const loadPromises = layersToLoad.map(async (layerDef) => {
+        try {
+          const response = await fetch(layerDef.file);
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const data = await response.json();
+
+          // Create GeoJSON layer with custom styling
+          const geojsonLayer = L.geoJSON(data, {
+            style: function (feature) {
+              // Use the defined style for polygons/lines; points are handled separately
+              if (feature.geometry.type === 'Point' || feature.geometry.type === 'MultiPoint') {
+                return {}; // we'll use pointToLayer
+              }
+              return layerDef.style;
+            },
+            pointToLayer: function (feature, latlng) {
+              return L.circleMarker(latlng, layerDef.pointStyle || layerDef.style);
+            },
+            onEachFeature: function (feature, layer) {
+              layer.bindPopup(buildPopup(feature));
+            }
+          });
+
+          // Add to map
+          geojsonLayer.addTo(map);
+
+          // Extend overall bounds
+          if (geojsonLayer.getBounds().isValid()) {
+            allBounds.extend(geojsonLayer.getBounds());
+          }
+
+          // Store for layer control
+          overlayLayers[layerDef.name] = geojsonLayer;
+
+          // Add to legend
+          const legendColor = layerDef.pointStyle 
+                              ? layerDef.pointStyle.fillColor 
+                              : (layerDef.style.fillColor || layerDef.style.color);
+          legendDiv.innerHTML += `<i style="background:${legendColor}"></i> ${layerDef.name}<br>`;
+
+          // ---- Search control (optional, per layer) ----
+          if (layerDef.searchField) {
+            const searchControl = new L.Control.Search({
+              layer: geojsonLayer,
+              propertyName: layerDef.searchField,
+              marker: false,
+              moveToLocation: (latlng, title, map) => map.setView(latlng, 17),
+              textPlaceholder: `Search ${layerDef.name}...`,
+              position: 'topleft'
+            });
+            map.addControl(searchControl);
+            // To avoid multiple search boxes stacking, we only add the first one or let user decide.
+            // If you want only one global search, remove this block and implement separately.
+          }
+
+          console.log(`✅ Loaded ${layerDef.name}`);
+        } catch (error) {
+          console.warn(`❌ Skipping ${layerDef.file}: ${error.message}`);
+          // You could add a fallback, but we just skip missing files
+        }
+      });
+
+      await Promise.all(loadPromises);
+
+      // After all layers loaded, finalize map
+      if (allBounds.isValid()) {
+        map.fitBounds(allBounds);
+      } else {
+        console.warn('No layers loaded, showing default view.');
+      }
+
+      // Add Layer Control
+      if (Object.keys(overlayLayers).length > 0) {
+        L.control.layers(null, overlayLayers).addTo(map);
+      }
+
+      // Add Legend
+      const legendControl = L.control({ position: 'bottomright' });
+      legendControl.onAdd = function () { return legendDiv; };
+      legendControl.addTo(map);
+
+      // Measurement control
+      L.control.measure({
+        position: 'topright',
+        primaryLengthUnit: 'kilometers',
+        secondaryLengthUnit: 'miles',
+        primaryAreaUnit: 'sqkilometers'
+      }).addTo(map);
+
+      // ---- Download links for all layers (optional) ----
+      const downloadControl = L.control({ position: 'bottomleft' });
+      downloadControl.onAdd = function () {
+        const div = L.DomUtil.create('div', 'info');
+        div.innerHTML = '<strong>📥 Download Data</strong><br>';
+        layersToLoad.forEach(layer => {
+          div.innerHTML += `<a href="${layer.file}" download style="display:block;">${layer.name}</a>`;
+        });
+        return div;
+      };
+      downloadControl.addTo(map);
+    }
+
+    // Start loading
+    loadAllLayers();
+  </script>
+</body>
+</html>
