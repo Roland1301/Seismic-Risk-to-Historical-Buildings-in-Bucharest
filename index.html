@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Auto‑loading Map</title>
+  <title>Auto Map from layers.json</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet-measure@3.1.0/dist/leaflet-measure.css" />
   <style>
-    body { margin: 0; padding: 0; }
-    #map { width: 100vw; height: 100vh; }
-    .info { padding: 6px 8px; background: white; box-shadow: 0 0 15px rgba(0,0,0,0.2); border-radius: 5px; }
-    .legend i { width: 18px; height: 18px; float: left; margin-right: 8px; opacity: 0.7; }
+    body { margin:0; padding:0; }
+    #map { width:100vw; height:100vh; }
+    .info { padding:6px 8px; background:white; box-shadow:0 0 15px rgba(0,0,0,0.2); border-radius:5px; }
+    .legend i { width:18px; height:18px; float:left; margin-right:8px; opacity:0.7; }
   </style>
 </head>
 <body>
@@ -21,36 +21,30 @@
   <script src="https://unpkg.com/leaflet-search@4.0.0/dist/leaflet-search.min.js"></script>
 
   <script>
-    // Default style pool (colours cycle through these)
-    const colorPalette = [
-      "#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
-      "#911eb4", "#42d4f4", "#f032e6", "#bfef45", "#fabebe",
-      "#469990", "#e6beff", "#9a6324", "#800000", "#aaffc3",
-      "#808000", "#ffd8b1", "#000075", "#a9a9a9"
-    ];
-    let colorIndex = 0;
+    // --- Configuration ---
+    const MANIFEST_FILE = 'layers.json';
 
-    function getNextColor() {
-      return colorPalette[colorIndex++ % colorPalette.length];
-    }
+    // Colour palette for automatic layer styling
+    const palette = ["#e6194b","#3cb44b","#ffe119","#4363d8","#f58231","#911eb4","#42d4f4","#f032e6","#bfef45","#fabebe","#469990","#e6beff","#9a6324","#800000","#aaffc3","#808000","#ffd8b1","#000075","#a9a9a9"];
+    let colorIdx = 0;
+    function getColor() { return palette[colorIdx++ % palette.length]; }
 
     const map = L.map('map').setView([20, 0], 2);
-
-    // Basemap
     L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; OpenStreetMap contributors, &copy; CARTO',
+      attribution: '&copy; OpenStreetMap, &copy; CARTO',
       maxZoom: 19
     }).addTo(map);
 
-    // Helper to guess a display name from filename
+    const overlayLayers = {};
+    const legendDiv = document.createElement('div');
+    legendDiv.className = 'info legend';
+    legendDiv.innerHTML = '<strong>Legend</strong><br>';
+    let allBounds = L.latLngBounds();
+
     function guessName(filename) {
-      return filename
-        .replace(/\.[^/.]+$/, "")     // remove extension
-        .replace(/[-_]/g, " ")        // replace hyphens/underscores with spaces
-        .replace(/\b\w/g, c => c.toUpperCase()); // capitalise words
+      return filename.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ").replace(/\b\w/g, c => c.toUpperCase());
     }
 
-    // Build popup table
     function buildPopup(feature) {
       let html = '<table style="max-width:250px;">';
       for (let key in feature.properties) {
@@ -60,101 +54,86 @@
       return html;
     }
 
-    async function loadLayers() {
+    async function loadLayersFromManifest() {
       let layersList;
       try {
-        const resp = await fetch('layers.json');
-        if (!resp.ok) throw new Error('layers.json not found');
+        const resp = await fetch(MANIFEST_FILE);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         layersList = await resp.json();
-        if (!Array.isArray(layersList)) throw new Error('Invalid format');
+        if (!Array.isArray(layersList)) throw new Error('Invalid JSON (must be array)');
       } catch (err) {
-        alert('Could not load layers.json. Create it with at least [{"file":"yourdata.geojson"}].');
+        alert(`❌ Could not load ${MANIFEST_FILE}. Create it with at least [{"file":"yourdata.geojson"}].\n\nError: ${err.message}`);
         console.error(err);
         return;
       }
 
-      const overlayLayers = {};
-      const legendDiv = document.createElement('div');
-      legendDiv.className = 'info legend';
-      legendDiv.innerHTML = '<strong>Legend</strong><br>';
-      let allBounds = L.latLngBounds();
-
-      // Process each entry
       for (const layerDef of layersList) {
-        const fileName = layerDef.file;
-        const layerName = layerDef.name || guessName(fileName);
-        // Determine styles
-        const baseStyle = layerDef.style || {};
-        const pointStyle = layerDef.pointStyle || baseStyle;
+        const file = layerDef.file;
+        const name = layerDef.name || guessName(file);
+        const searchField = layerDef.searchField || null;
 
-        // Assign default colours if missing
-        const usedColor = baseStyle.fillColor || baseStyle.color || pointStyle.fillColor || pointStyle.color || getNextColor();
+        // Merge default style with user overrides
+        const userStyle = layerDef.style || {};
+        const userPointStyle = layerDef.pointStyle || userStyle;
+        const color = userStyle.fillColor || userStyle.color || userPointStyle.fillColor || userPointStyle.color || getColor();
 
-        const mergedBase = {
-          color: usedColor,
+        const baseStyle = {
+          color: color,
           weight: 2,
           opacity: 0.8,
           fillOpacity: 0.5,
-          ...baseStyle,
-          fillColor: baseStyle.fillColor || usedColor,
-          color: baseStyle.color || usedColor
+          ...userStyle,
+          fillColor: userStyle.fillColor || color,
+          color: userStyle.color || color
         };
-        const mergedPoint = {
+        const pointStyle = {
           radius: 7,
-          fillColor: usedColor,
+          fillColor: color,
           color: "#333",
           weight: 1,
           opacity: 1,
           fillOpacity: 0.8,
-          ...pointStyle,
-          fillColor: pointStyle.fillColor || usedColor,
-          color: pointStyle.color || "#333"
+          ...userPointStyle,
+          fillColor: userPointStyle.fillColor || color,
+          color: userPointStyle.color || "#333"
         };
 
         try {
-          const dataResp = await fetch(fileName);
+          const dataResp = await fetch(file);
           if (!dataResp.ok) throw new Error(`HTTP ${dataResp.status}`);
           const geojson = await dataResp.json();
 
           const leafletLayer = L.geoJSON(geojson, {
             style: (feature) => {
-              if (feature.geometry.type === 'Point' || feature.geometry.type === 'MultiPoint') {
-                return {}; // handled by pointToLayer
-              }
-              return mergedBase;
+              if (feature.geometry.type === 'Point' || feature.geometry.type === 'MultiPoint') return {};
+              return baseStyle;
             },
-            pointToLayer: (feature, latlng) => L.circleMarker(latlng, mergedPoint),
+            pointToLayer: (feature, latlng) => L.circleMarker(latlng, pointStyle),
             onEachFeature: (feature, layer) => layer.bindPopup(buildPopup(feature))
           }).addTo(map);
 
-          overlayLayers[layerName] = leafletLayer;
+          overlayLayers[name] = leafletLayer;
           if (leafletLayer.getBounds().isValid()) allBounds.extend(leafletLayer.getBounds());
 
-          // Legend entry
-          legendDiv.innerHTML += `<i style="background:${mergedPoint.fillColor || mergedBase.fillColor}"></i> ${layerName}<br>`;
+          legendDiv.innerHTML += `<i style="background:${pointStyle.fillColor || baseStyle.fillColor}"></i> ${name}<br>`;
 
-          // Search (if searchField specified)
-          if (layerDef.searchField) {
-            const searchControl = new L.Control.Search({
+          if (searchField) {
+            map.addControl(new L.Control.Search({
               layer: leafletLayer,
-              propertyName: layerDef.searchField,
+              propertyName: searchField,
               marker: false,
-              moveToLocation: (latlng, title, map) => map.setView(latlng, 17),
-              textPlaceholder: `Search ${layerName}...`
-            });
-            map.addControl(searchControl);
+              moveToLocation: (latlng) => map.setView(latlng, 17),
+              textPlaceholder: `Search ${name}...`
+            }));
           }
-          console.log(`✅ Loaded: ${layerName}`);
+          console.log(`✅ Loaded: ${name}`);
         } catch (e) {
-          console.warn(`⚠️ Skipping ${fileName}: ${e.message}`);
+          console.warn(`⚠️ Skipping ${file}: ${e.message}`);
         }
       }
 
-      // Finalize UI
       if (allBounds.isValid()) map.fitBounds(allBounds);
-      if (Object.keys(overlayLayers).length > 0) {
-        L.control.layers(null, overlayLayers).addTo(map);
-      }
+      if (Object.keys(overlayLayers).length > 0) L.control.layers(null, overlayLayers).addTo(map);
 
       L.control.measure({
         position: 'topright',
@@ -162,25 +141,24 @@
         secondaryLengthUnit: 'miles'
       }).addTo(map);
 
-      const legendControl = L.control({ position: 'bottomright' });
-      legendControl.onAdd = () => legendDiv;
-      legendControl.addTo(map);
+      const legendCtrl = L.control({ position: 'bottomright' });
+      legendCtrl.onAdd = () => legendDiv;
+      legendCtrl.addTo(map);
 
       // Download links
-      const dlControl = L.control({ position: 'bottomleft' });
-      dlControl.onAdd = function () {
+      const dlCtrl = L.control({ position: 'bottomleft' });
+      dlCtrl.onAdd = function() {
         const div = L.DomUtil.create('div', 'info');
         div.innerHTML = '<strong>📥 Download</strong><br>';
         layersList.forEach(l => {
-          const name = l.name || guessName(l.file);
-          div.innerHTML += `<a href="${l.file}" download>${name}</a><br>`;
+          div.innerHTML += `<a href="${l.file}" download>${l.name || guessName(l.file)}</a><br>`;
         });
         return div;
       };
-      dlControl.addTo(map);
+      dlCtrl.addTo(map);
     }
 
-    loadLayers();
+    loadLayersFromManifest();
   </script>
 </body>
 </html>
