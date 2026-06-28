@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Free Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-measure@3.1.0/dist/leaflet-measure.css" />
+  <style>
+    body { margin:0; padding:0; }
+    #map { width:100vw; height:100vh; }
+    .info { padding:6px 8px; background:white; box-shadow:0 0 15px rgba(0,0,0,0.2); border-radius:5px; }
+    .legend i { width:18px; height:18px; float:left; margin-right:8px; opacity:0.7; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-measure@3.1.0/dist/leaflet-measure.js"></script>
+  <script src="https://unpkg.com/leaflet-search@4.0.0/dist/leaflet-search.min.js"></script>
+
+  <script>
+    const map = L.map('map').setView([51.505, -0.09], 6); // will be overridden by data extent
+
+    // Basemap
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap contributors, &copy; CARTO',
+      maxZoom: 19
+    }).addTo(map);
+
+    // Load GeoJSON
+    fetch('data.geojson')
+      .then(response => response.json())
+      .then(data => {
+        const geojsonLayer = L.geoJSON(data, {
+          onEachFeature: (feature, layer) => {
+            // Pop‑up with all attributes
+            let popup = '<table>';
+            for (let key in feature.properties) {
+              popup += `<tr><td><strong>${key}</strong></td><td>${feature.properties[key]}</td></tr>`;
+            }
+            popup += '</table>';
+            layer.bindPopup(popup);
+          },
+          // Customise the markers here if your data is points:
+          pointToLayer: (feature, latlng) => L.circleMarker(latlng, {
+            radius: 8,
+            fillColor: '#ff7800',
+            color: '#333',
+            weight: 1,
+            opacity: 1,
+            fillOpacity: 0.8
+          })
+        }).addTo(map);
+
+        // Fit the map to your data
+        map.fitBounds(geojsonLayer.getBounds());
+
+        // Layer switcher (add more layers later)
+        L.control.layers(null, { 'My Data': geojsonLayer }).addTo(map);
+
+        // Legend
+        const legend = L.control({ position: 'bottomright' });
+        legend.onAdd = function () {
+          const div = L.DomUtil.create('div', 'info legend');
+          div.innerHTML = '<strong>Legend</strong><br><i style="background:#ff7800"></i> Features';
+          return div;
+        };
+        legend.addTo(map);
+
+        // Search (replace 'name' with the main attribute you want to search)
+        const searchControl = new L.Control.Search({
+          layer: geojsonLayer,
+          propertyName: 'name',  // 🔁 change to your field
+          marker: false,
+          moveToLocation: (latlng, title, map) => map.setView(latlng, 15)
+        });
+        map.addControl(searchControl);
+
+        // Measurement
+        L.control.measure({
+          position: 'topleft',
+          primaryLengthUnit: 'kilometers',
+          secondaryLengthUnit: 'miles',
+          primaryAreaUnit: 'sqkilometers'
+        }).addTo(map);
+
+        // Download link
+        const downloadControl = L.control({ position: 'bottomleft' });
+        downloadControl.onAdd = function () {
+          const div = L.DomUtil.create('div', 'info');
+          div.innerHTML = '<a href="data.geojson" download style="text-decoration:none; font-weight:bold;">⬇ Download Data</a>';
+          return div;
+        };
+        downloadControl.addTo(map);
+      })
+      .catch(err => alert('Could not load data.geojson. Make sure the file is in the same folder as this HTML.'));
+  </script>
+</body>
+</html>
