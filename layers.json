@@ -1,11 +1,11 @@
 [
-  { "file": "affected_roads.geojson" },
-  { "file": "buffer.geojson" },
-  { "file": "city_bound.geojson" }
-  { "file": "districts.geojson" },
-  { "file": "monument_buildings.geojson" },
-  { "file": "old_town_bound.geojson" }
-  { "file": "risk_index.geojson" },
-  { "file": "seismic_risk_buildings.geojson" },
-  { "file": "study_area.geojson" }
+  {"file": "affected_roads.geojson"},
+  {"file": "buffer.geojson"},
+  {"file": "city_bound.geojson"}
+  {"file": "districts.geojson"},
+  {"file": "monument_buildings.geojson"},
+  {"file": "old_town_bound.geojson"}
+  {"file": "risk_index.geojson"},
+  {"file": "seismic_risk_buildings.geojson"},
+  {"file": "study_area.geojson"}
 ]
